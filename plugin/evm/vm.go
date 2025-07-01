@@ -897,6 +897,7 @@ func (vm *VM) WaitForEvent(ctx context.Context) (commonEng.Message, error) {
 	}
 
 	pending := make(chan commonEng.Message, 1)
+	errors := make(chan error, 1)
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -905,7 +906,12 @@ func (vm *VM) WaitForEvent(ctx context.Context) (commonEng.Message, error) {
 
 	go func() {
 		defer wg.Done()
-		pending <- vm.builder.waitForTxEnqueue(ctx)
+		msg, err := vm.builder.waitForTxEnqueue(ctx)
+		if err != nil {
+			errors <- err
+			return
+		}
+		pending <- msg
 	}()
 
 	defer wg.Wait()
@@ -913,12 +919,14 @@ func (vm *VM) WaitForEvent(ctx context.Context) (commonEng.Message, error) {
 	defer cancel()
 
 	select {
+	case err := <-errors:
+		return commonEng.Message(0), err
 	case ss := <-vm.stateSyncDone:
 		return ss, nil
 	case pendingTx := <-pending:
 		return pendingTx, nil
 	case <-ctx.Done():
-		return commonEng.Message(0), nil
+		return commonEng.Message(0), ctx.Err()
 	case <-vm.shutdownChan:
 		return commonEng.Message(0), nil
 	}
@@ -931,6 +939,7 @@ func (vm *VM) Shutdown(context.Context) error {
 	}
 	if vm.cancel != nil {
 		vm.cancel()
+		vm.cancel = nil
 	}
 	vm.Network.Shutdown()
 	if err := vm.Client.Shutdown(); err != nil {

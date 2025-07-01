@@ -5,6 +5,7 @@ package evm
 
 import (
 	"context"
+	"github.com/ava-labs/avalanchego/utils/lock"
 	"sync"
 	"time"
 
@@ -34,7 +35,7 @@ type blockBuilder struct {
 	shutdownChan <-chan struct{}
 	shutdownWg   *sync.WaitGroup
 
-	pendingSignal sync.Cond
+	pendingSignal *lock.Cond
 
 	// [buildBlockLock] must be held when accessing [buildSent]
 	buildBlockLock sync.Mutex
@@ -56,7 +57,7 @@ func (vm *VM) NewBlockBuilder(extraMempool extension.BuilderMempool) *blockBuild
 		shutdownChan: vm.shutdownChan,
 		shutdownWg:   &vm.shutdownWg,
 	}
-	b.pendingSignal = sync.Cond{L: &b.buildBlockLock}
+	b.pendingSignal = lock.NewCond(&b.buildBlockLock)
 	b.handleBlockBuilding()
 	return b
 }
@@ -156,30 +157,18 @@ func (b *blockBuilder) awaitSubmittedTxs() {
 	})
 }
 
-func (b *blockBuilder) waitForTxEnqueue(ctx context.Context) commonEng.Message {
+func (b *blockBuilder) waitForTxEnqueue(ctx context.Context) (commonEng.Message, error) {
 	b.buildBlockLock.Lock()
 	defer b.buildBlockLock.Unlock()
 
-	for {
-		select {
-		case <-b.shutdownChan:
-			return 0
-		case <-ctx.Done():
-			return 0
-		default:
+	for !b.needToBuild() {
+		if err := b.pendingSignal.Wait(ctx); err != nil {
+			return 0, err
 		}
-
-		if b.needToBuild() {
-			return commonEng.PendingTxs
-		}
-
-		b.pendingSignal.Wait()
 	}
+	return commonEng.PendingTxs, nil
 }
 
 func (b *blockBuilder) wakeup() {
-	b.buildBlockLock.Lock()
-	defer b.buildBlockLock.Unlock()
-
 	b.pendingSignal.Broadcast()
 }

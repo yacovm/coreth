@@ -4128,7 +4128,7 @@ func TestSubscribeToEvents(t *testing.T) {
 				go func() {
 					defer wg.Done()
 					msg, err := vm.WaitForEvent(ctx)
-					require.NoError(t, err)
+					require.ErrorIs(t, context.DeadlineExceeded, err)
 					require.Equal(t, commonEng.Message(0), msg)
 				}()
 
@@ -4201,7 +4201,7 @@ func TestSubscribeToEvents(t *testing.T) {
 				go func() {
 					defer wg.Done()
 					msg, err := vm.WaitForEvent(ctx)
-					require.NoError(t, err)
+					require.ErrorIs(t, context.DeadlineExceeded, err)
 					require.Equal(t, commonEng.Message(0), msg)
 				}()
 
