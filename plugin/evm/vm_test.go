@@ -1549,6 +1549,116 @@ func TestBuildBlockLargeTxStarvation(t *testing.T) {
 	require.NoError(blk4.Accept(ctx))
 }
 
+func TestSetPreference(t *testing.T) {
+	fortunaFork := upgradetest.Fortuna
+
+	vm1 := newDefaultTestVM()
+	vmtest.SetupTestVM(t, vm1, vmtest.TestVMConfig{
+		Fork: &fortunaFork,
+	})
+
+	vm2 := newDefaultTestVM()
+	vmtest.SetupTestVM(t, vm2, vmtest.TestVMConfig{
+		Fork: &fortunaFork,
+	})
+
+	vm3 := newDefaultTestVM()
+	vmtest.SetupTestVM(t, vm3, vmtest.TestVMConfig{
+		Fork: &fortunaFork,
+	})
+
+	signedTx1 := newSignedLegacyTx(t, vm2.chainConfig, vmtest.TestKeys[1].ToECDSA(), 0, &vmtest.TestEthAddrs[1], big.NewInt(1), 21000, vmtest.InitialBaseFee, nil)
+	signedTx2 := newSignedLegacyTx(t, vm2.chainConfig, vmtest.TestKeys[0].ToECDSA(), 0, &vmtest.TestEthAddrs[1], big.NewInt(1), 21001, vmtest.InitialBaseFee, nil)
+	signedTx3 := newSignedLegacyTx(t, vm2.chainConfig, vmtest.TestKeys[1].ToECDSA(), 1, &vmtest.TestEthAddrs[1], big.NewInt(1), 21001, vmtest.InitialBaseFee, nil)
+
+	// VM2 builds a block blk21
+	// blk21
+	err := errors.Join(vm2.txPool.AddRemotesSync([]*types.Transaction{signedTx1})...)
+	require.NoError(t, err)
+
+	blk21, err := vm2.BuildBlock(context.Background())
+	require.NoError(t, err)
+
+	require.NoError(t, blk21.Verify(context.Background()))
+
+	require.NoError(t, vm2.SetPreference(context.Background(), blk21.ID()))
+
+	// VM2 builds a block blk22 on top of blk21
+	//  blk21
+	//   /
+	// blk22
+
+	err = errors.Join(vm2.txPool.AddRemotesSync([]*types.Transaction{signedTx2})...)
+	require.NoError(t, err)
+
+	blk22, err := vm2.BuildBlock(context.Background())
+	require.NoError(t, err)
+
+	// VM3 parses blk21 and calls it blk31
+	// blk31 (blk21)
+
+	blk31, err := vm3.ParseBlock(context.Background(), blk21.Bytes())
+	require.NoError(t, err)
+
+	require.NoError(t, blk31.Verify(context.Background()))
+
+	require.NoError(t, vm3.SetPreference(context.Background(), blk31.ID()))
+
+	// VM3 builds a block blk31 on top of blk21 called blk31
+	//  blk31 (blk21)
+	//   /
+	// blk31
+
+	err = errors.Join(vm3.txPool.AddRemotesSync([]*types.Transaction{signedTx3})...)
+	require.NoError(t, err)
+
+	blk32, err := vm3.BuildBlock(context.Background())
+	require.NoError(t, err)
+
+	// VM1 parses blk21 and calls it blk11
+	// blk11 (blk21)
+
+	blk11, err := vm1.ParseBlock(context.Background(), blk21.Bytes())
+	require.NoError(t, err)
+
+	require.NoError(t, blk11.Verify(context.Background()))
+
+	require.NoError(t, vm1.SetPreference(context.Background(), blk11.ID()))
+
+	// VM1 parses blk22 and calls it blk12
+	//  blk11 (blk21)
+	//   /
+	// blk12 (blk22) <---
+
+	blk12, err := vm1.ParseBlock(context.Background(), blk22.Bytes())
+	require.NoError(t, err)
+
+	require.NoError(t, blk12.Verify(context.Background()))
+
+	require.NoError(t, vm1.SetPreference(context.Background(), blk12.ID()))
+
+	// VM1 sets the preference back to blk11, but it has a child block - blk12
+
+	//  blk11 (blk21) <----
+	//   /
+	// blk12 (blk22)
+
+	require.NoError(t, vm1.SetPreference(context.Background(), blk11.ID()))
+
+	// VM1 parses blk32 and calls it blk13
+
+	//    blk11 (blk21)
+	//   /     \
+	// blk12  blk13 (blk32) <----
+
+	blk13, err := vm1.ParseBlock(context.Background(), blk32.Bytes())
+	require.NoError(t, err)
+
+	require.NoError(t, blk13.Verify(context.Background()))
+
+	require.NoError(t, vm1.SetPreference(context.Background(), blk13.ID()))
+}
+
 func TestWaitForEvent(t *testing.T) {
 	fortunaFork := upgradetest.Fortuna
 	for _, testCase := range []struct {
